@@ -1,0 +1,511 @@
+"""
+メルカリ出品サポートシステム - Flaskアプリケーション
+
+LINE Messaging APIのWebhookを受け取り、商品情報を生成する。
+
+使用法:
+    開発環境: python app.py
+    本番環境: gunicorn app:app
+"""
+import os
+import sys
+from pathlib import Path
+
+# プロジェクトルートをパスに追加
+sys.path.insert(0, str(Path(__file__).parent))
+
+from flask import Flask, request, abort
+from dotenv import load_dotenv
+
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.webhooks import (
+    MessageEvent,
+    TextMessageContent,
+    ImageMessageContent,
+)
+
+from config import Config
+from core.text_parser import TextParser
+from core.image_analyzer import ImageAnalyzer
+from core.description_generator import DescriptionGenerator
+from core.pricing import PricingCalculator
+from core.feature_refiner import FeatureRefiner
+from core.session_manager import session_manager, SessionState, UserSession
+from models.product import Product, Measurements, Category
+from integrations.line_handler import LineHandler
+from integrations.openai_client import OpenAIClient
+from integrations.sheets_client import get_sheets_client
+# TODO: 画像保存機能は将来実装
+# from integrations.drive_client import get_drive_client, DriveClient
+
+
+# 環境変数を読み込む
+load_dotenv()
+
+# Flaskアプリケーション
+app = Flask(__name__)
+
+# グローバル変数（遅延初期化）
+line_handler = None
+openai_client = None
+
+
+def get_line_handler() -> LineHandler:
+    """LineHandlerのシングルトンを取得"""
+    global line_handler
+    if line_handler is None:
+        line_handler = LineHandler()
+    return line_handler
+
+
+def get_openai_client() -> OpenAIClient:
+    """OpenAIClientのシングルトンを取得"""
+    global openai_client
+    if openai_client is None:
+        openai_client = OpenAIClient()
+    return openai_client
+
+
+@app.route("/")
+def index():
+    """ヘルスチェック用エンドポイント"""
+    return "Mercari Listing Support System is running!"
+
+
+@app.route("/callback", methods=["POST"])
+def callback():
+    """LINE Webhookエンドポイント"""
+    handler = get_line_handler()
+
+    # 署名検証
+    signature = request.headers.get("X-Line-Signature", "")
+    body = request.get_data(as_text=True)
+
+    try:
+        handler.webhook_handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+
+    return "OK"
+
+
+# イベントハンドラーの登録
+def setup_handlers():
+    """Webhookイベントハンドラーを設定"""
+    handler = get_line_handler()
+
+    @handler.webhook_handler.add(MessageEvent, message=TextMessageContent)
+    def handle_text_message(event: MessageEvent):
+        """テキストメッセージの処理"""
+        user_id = event.source.user_id
+        text = event.message.text
+        reply_token = event.reply_token
+
+        process_text_message(user_id, text, reply_token)
+
+    @handler.webhook_handler.add(MessageEvent, message=ImageMessageContent)
+    def handle_image_message(event: MessageEvent):
+        """画像メッセージの処理"""
+        user_id = event.source.user_id
+        message_id = event.message.id
+        reply_token = event.reply_token
+
+        process_image_message(user_id, message_id, reply_token)
+
+
+def process_text_message(user_id: str, text: str, reply_token: str):
+    """
+    テキストメッセージを処理する。
+
+    新しい対話式フロー:
+    - IDLE: 画像と一緒に送られた「仕入れ価格 管理番号」を処理
+    - COLLECTING: 仕入れ価格・管理番号を待機中
+    - WAITING_MEASUREMENTS: 実寸入力待ち
+    - CONFIRMING: 修正または戦略選択として処理
+    """
+    handler = get_line_handler()
+    session = session_manager.get_session(user_id)
+
+    # リセットコマンド
+    if text.strip().lower() in ["リセット", "reset", "キャンセル", "cancel"]:
+        session.reset()
+        handler.clear_user_images(user_id)
+        session_manager.update_session(session)
+        handler.reply_text(reply_token, "セッションをリセットしました。\n商品画像と「仕入れ価格 管理番号」を送信してください。\n例: 画像 + 「880 222」")
+        return
+
+    # 確認待ち状態の場合
+    if session.state == SessionState.CONFIRMING:
+        process_confirmation_response(user_id, text, reply_token, session)
+        return
+
+    # 実寸入力待ち状態の場合
+    if session.state == SessionState.WAITING_MEASUREMENTS:
+        process_measurements_input(user_id, text, reply_token, session)
+        return
+
+    # IDLE または COLLECTING 状態の場合
+    # シンプル入力から価格と管理番号を抽出
+    price, mgmt_id = TextParser.parse_price_and_id(text)
+
+    if price is not None:
+        session.purchase_price = price
+    if mgmt_id is not None:
+        session.management_id = mgmt_id
+
+    # 従来形式のパースも試す（性別、サイズ、年代、実寸）
+    parsed = TextParser.parse_all(text)
+    if parsed["gender"]:
+        session.gender = parsed["gender"]
+    if parsed["size"]:
+        session.size = parsed["size"]
+    if parsed["era"]:
+        session.era = parsed["era"]
+    if parsed["measurements"] and (parsed["measurements"].has_tops_measurements() or parsed["measurements"].has_pants_measurements()):
+        session.measurements = parsed["measurements"]
+
+    session.text_input = text
+    session.state = SessionState.COLLECTING
+    session_manager.update_session(session)
+
+    # 画像があり、価格と管理番号が揃っている場合
+    if len(session.image_paths) > 0 and session.purchase_price and session.management_id:
+        # 実寸も既に入力済みの場合は解析開始
+        if session.measurements and (session.measurements.has_tops_measurements() or session.measurements.has_pants_measurements()):
+            try:
+                start_analysis(user_id, reply_token, session)
+            except Exception as e:
+                handler.reply_text(reply_token, f"エラーが発生しました: {str(e)}\n「リセット」と送信して最初からやり直してください。")
+        else:
+            # カテゴリ判定して実寸入力を促す
+            try:
+                start_category_detection(user_id, reply_token, session)
+            except Exception as e:
+                handler.reply_text(reply_token, f"エラーが発生しました: {str(e)}\n「リセット」と送信して最初からやり直してください。")
+    else:
+        # 不足データを通知
+        missing = []
+        if len(session.image_paths) == 0:
+            missing.append("画像")
+        if session.purchase_price is None:
+            missing.append("仕入れ価格")
+        if session.management_id is None:
+            missing.append("管理番号")
+
+        if missing:
+            handler.reply_text(
+                reply_token,
+                f"受け付けました。\n\n不足している情報:\n・" + "\n・".join(missing) +
+                "\n\n画像と「仕入れ価格 管理番号」を送信してください。\n例: 「880 222」"
+            )
+        else:
+            handler.reply_text(reply_token, "受け付けました。")
+
+
+def process_image_message(user_id: str, message_id: str, reply_token: str):
+    """
+    画像メッセージを処理する。
+
+    新しい対話式フロー:
+    画像をダウンロードして保存し、価格・管理番号の入力を待つ。
+    """
+    handler = get_line_handler()
+    session = session_manager.get_session(user_id)
+
+    # 確認待ち状態または実寸入力待ち状態では画像を受け付けない
+    if session.state in [SessionState.CONFIRMING, SessionState.WAITING_MEASUREMENTS]:
+        handler.reply_text(
+            reply_token,
+            "現在、入力待ち状態です。\n新しい商品を登録する場合は「リセット」と送信してください。"
+        )
+        return
+
+    # 画像をダウンロード
+    try:
+        image_path = handler.download_image(message_id, user_id)
+        session.image_paths.append(image_path)
+        session.state = SessionState.COLLECTING
+        session_manager.update_session(session)
+    except Exception as e:
+        handler.reply_text(reply_token, f"画像の保存に失敗しました: {str(e)}")
+        return
+
+    # 価格と管理番号が既に揃っている場合
+    if session.purchase_price and session.management_id:
+        # 実寸も入力済みの場合は解析開始
+        if session.measurements and (session.measurements.has_tops_measurements() or session.measurements.has_pants_measurements()):
+            try:
+                start_analysis(user_id, reply_token, session)
+            except Exception as e:
+                handler.reply_text(reply_token, f"エラーが発生しました: {str(e)}\n「リセット」と送信して最初からやり直してください。")
+        else:
+            # カテゴリ判定して実寸入力を促す
+            try:
+                start_category_detection(user_id, reply_token, session)
+            except Exception as e:
+                handler.reply_text(reply_token, f"エラーが発生しました: {str(e)}\n「リセット」と送信して最初からやり直してください。")
+    else:
+        # 画像受付を通知し、価格と管理番号の入力を促す
+        handler.reply_text(
+            reply_token,
+            f"画像を受け付けました（{len(session.image_paths)}枚目）\n\n「仕入れ価格 管理番号」を送信してください。\n例: 「880 222」"
+        )
+
+
+def start_category_detection(user_id: str, reply_token: str, session: UserSession):
+    """
+    画像からカテゴリを判定し、実寸入力を促すメッセージを送信する。
+    """
+    handler = get_line_handler()
+    client = get_openai_client()
+
+    # AIでカテゴリを判定
+    category = client.detect_category(session.image_paths)
+    session.detected_category = category
+    session.state = SessionState.WAITING_MEASUREMENTS
+    session_manager.update_session(session)
+
+    # カテゴリに応じた実寸入力の案内
+    if category == "パンツ":
+        prompt = "実寸を入力してください（ウエスト 股下 裾幅 股上の順）\n例: 「80 75 20 30」"
+    elif category == "セットアップ":
+        prompt = "実寸を入力してください\n（着丈 身幅 肩幅 袖丈 ウエスト 股下 裾幅 股上の順）\n例: 「70 55 45 60 80 75 20 30」"
+    else:
+        prompt = "実寸を入力してください（着丈 身幅 肩幅 袖丈の順）\n例: 「60 50 42 20」"
+
+    handler.reply_text(
+        reply_token,
+        f"カテゴリ: {category}\n\n{prompt}"
+    )
+
+
+def process_measurements_input(user_id: str, text: str, reply_token: str, session: UserSession):
+    """
+    実寸入力を処理する。
+    """
+    handler = get_line_handler()
+
+    # カテゴリに応じて実寸をパース
+    category = session.detected_category or "トップス"
+    measurements = TextParser.parse_measurements_simple(text, category)
+
+    # 必要な項目が揃っているかチェック
+    if category == "パンツ":
+        if not measurements.has_pants_measurements():
+            handler.reply_text(
+                reply_token,
+                "実寸が正しく入力されていません。\nウエスト 股下 裾幅 股上の順で数値を入力してください。\n例: 「80 75 20 30」"
+            )
+            return
+    elif category == "セットアップ":
+        if not (measurements.has_tops_measurements() and measurements.has_pants_measurements()):
+            handler.reply_text(
+                reply_token,
+                "実寸が正しく入力されていません。\n着丈 身幅 肩幅 袖丈 ウエスト 股下 裾幅 股上の順で数値を入力してください。\n例: 「70 55 45 60 80 75 20 30」"
+            )
+            return
+    else:
+        if not measurements.has_tops_measurements():
+            handler.reply_text(
+                reply_token,
+                "実寸が正しく入力されていません。\n着丈 身幅 肩幅 袖丈の順で数値を入力してください。\n例: 「60 50 42 20」"
+            )
+            return
+
+    session.measurements = measurements
+    session_manager.update_session(session)
+
+    # 画像解析を開始
+    try:
+        start_analysis(user_id, reply_token, session)
+    except Exception as e:
+        handler.reply_text(reply_token, f"エラーが発生しました: {str(e)}\n「リセット」と送信して最初からやり直してください。")
+
+
+def start_analysis(user_id: str, reply_token: str, session: UserSession):
+    """
+    画像解析を開始し、確認サマリーを返信する。
+    """
+    handler = get_line_handler()
+    client = get_openai_client()
+
+    # 画像解析
+    analyzer = ImageAnalyzer(client)
+    features = analyzer.analyze(session.image_paths, session.text_input)
+
+    # 既に判定したカテゴリがあれば使用（文字列をEnum型に変換）
+    if session.detected_category:
+        category_map = {
+            "トップス": Category.TOPS,
+            "パンツ": Category.PANTS,
+            "セットアップ": Category.SETUP,
+        }
+        features.category = category_map.get(session.detected_category, Category.TOPS)
+
+    # テキストから取得した情報で上書き
+    if session.gender:
+        features.gender = session.gender
+    if session.size:
+        features.size = session.size
+    if session.era:
+        features.era = session.era
+
+    # セッションに保存
+    session.features = features
+    session.description_text = getattr(features, "_description_text", "")
+    session.state = SessionState.CONFIRMING
+    session_manager.update_session(session)
+
+    # 確認メッセージを送信
+    confirmation = handler.format_confirmation_message(
+        features.to_dict(),
+        len(session.image_paths),
+    )
+    handler.reply_text(reply_token, confirmation)
+
+
+def process_confirmation_response(
+    user_id: str,
+    text: str,
+    reply_token: str,
+    session: UserSession,
+):
+    """
+    確認状態でのユーザー入力を処理する。
+
+    修正内容を反映し、戦略が選択されたら生成を開始する。
+    """
+    handler = get_line_handler()
+
+    # 入力を解析
+    modifications, strategy = FeatureRefiner.parse_input(text)
+
+    # 修正を反映
+    if modifications and session.features:
+        session.features = FeatureRefiner.apply_modifications(
+            session.features,
+            modifications,
+        )
+        session_manager.update_session(session)
+
+    # 戦略が選択された場合は生成開始
+    if strategy:
+        try:
+            generate_product_info(user_id, reply_token, session, strategy)
+        except Exception as e:
+            handler.reply_text(reply_token, f"生成中にエラーが発生しました: {str(e)}\n「リセット」と送信して最初からやり直してください。")
+    elif modifications:
+        # 修正のみの場合は確認メッセージを再送
+        confirmation = handler.format_confirmation_message(
+            session.features.to_dict(),
+            len(session.image_paths),
+        )
+        handler.reply_text(
+            reply_token,
+            f"修正を反映しました。\n\n{confirmation}"
+        )
+    else:
+        # 不明な入力
+        handler.reply_text(
+            reply_token,
+            "入力を認識できませんでした。\n\n修正する場合：「1 adidas」のように番号と内容を送信\n確定する場合：戦略（A/B/C）を送信"
+        )
+
+
+def generate_product_info(
+    user_id: str,
+    reply_token: str,
+    session: UserSession,
+    strategy,
+):
+    """
+    商品情報を生成し、結果を返信する。
+    """
+    handler = get_line_handler()
+    client = get_openai_client()
+
+    session.state = SessionState.GENERATING
+    session_manager.update_session(session)
+
+    # 商品データを構築
+    product = Product(
+        management_id=session.management_id,
+        purchase_price=session.purchase_price,
+        measurements=session.measurements,
+        features=session.features,
+        image_paths=session.image_paths,
+        raw_text=session.text_input,
+    )
+
+    # 説明文を設定
+    if session.description_text:
+        product.features._description_text = session.description_text
+
+    # 商品説明を生成
+    generator = DescriptionGenerator(client)
+    product = generator.generate_all(product)
+
+    # 価格提案を生成
+    pricing_calc = PricingCalculator(client)
+    product.price_suggestion = pricing_calc.generate_price_suggestion(
+        features=session.features,
+        purchase_price=session.purchase_price,
+        strategy=strategy,
+    )
+
+    # セッションに保存
+    session.product = product
+    session_manager.update_session(session)
+
+    # 結果を返信
+    messages = handler.format_result_message(product.to_dict())
+    handler.reply_multiple(reply_token, messages)
+
+    # TODO: 画像保存機能は将来実装（サービスアカウントのストレージ制限のため一旦無効化）
+    # Google Driveに画像をアップロード
+    # image_formula = ""
+    # try:
+    #     drive_client = get_drive_client()
+    #     image_ids = drive_client.upload_images(
+    #         session.image_paths,
+    #         product.management_id,
+    #     )
+    #     if image_ids:
+    #         image_formula = DriveClient.get_images_formula(image_ids)
+    #         print(f"画像をGoogle Driveにアップロードしました: {len(image_ids)}枚")
+    # except Exception as e:
+    #     print(f"画像アップロードエラー: {e}")
+
+    # Googleスプレッドシートに保存
+    try:
+        sheets_client = get_sheets_client()
+        if sheets_client.save_product(product):
+            print(f"商品データをスプレッドシートに保存しました: {product.management_id}")
+        else:
+            print(f"商品データの保存に失敗しました: {product.management_id}")
+    except Exception as e:
+        print(f"スプレッドシート保存エラー: {e}")
+
+    # セッションをリセット
+    session.reset()
+    handler.clear_user_images(user_id)
+    session_manager.update_session(session)
+
+
+# ハンドラーを設定
+try:
+    setup_handlers()
+except Exception as e:
+    print(f"Warning: Could not setup LINE handlers: {e}")
+    print("LINE integration will not work until credentials are configured.")
+
+
+if __name__ == "__main__":
+    # 設定をチェック
+    errors = Config.validate()
+    if errors:
+        print(f"Warning: Missing environment variables: {', '.join(errors)}")
+
+    # 開発サーバーを起動
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)

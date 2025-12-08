@@ -1,0 +1,23 @@
+# Web Framework
+flask>=3.0.0
+gunicorn>=21.0.0
+
+# LINE Messaging API
+line-bot-sdk>=3.0.0
+
+# OpenAI API
+openai>=1.0.0
+
+# Google Sheets & Drive
+gspread>=5.0.0
+google-auth>=2.0.0
+google-api-python-client>=2.0.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Image Processing
+Pillow>=10.0.0
+
+# Utilities
+requests>=2.31.0
