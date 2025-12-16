@@ -245,11 +245,9 @@ def process_image_message(user_id: str, message_id: str, reply_token: str):
             except Exception as e:
                 handler.reply_text(reply_token, f"エラーが発生しました: {str(e)}\n「リセット」と送信して最初からやり直してください。")
     else:
-        # 画像受付を通知し、価格と管理番号の入力を促す
-        handler.reply_text(
-            reply_token,
-            f"画像を受け付けました（{len(session.image_paths)}枚目）\n\n「仕入れ価格 管理番号」を送信してください。\n例: 「880 222」"
-        )
+        # 複数画像対応: 画像受信時は返信せず、静かに蓄積する
+        # 価格・管理番号を受信した時にまとめて処理する
+        pass
 
 
 def start_category_detection(user_id: str, reply_token: str, session: UserSession):
@@ -273,9 +271,11 @@ def start_category_detection(user_id: str, reply_token: str, session: UserSessio
     else:
         prompt = "実寸を入力してください（着丈 身幅 肩幅 袖丈の順）\n例: 「60 50 42 20」"
 
+    # 画像枚数を含めたメッセージを送信
+    image_count = len(session.image_paths)
     handler.reply_text(
         reply_token,
-        f"カテゴリ: {category}\n\n{prompt}"
+        f"画像{image_count}枚を受け付けました。\n\nカテゴリ: {category}\n\n{prompt}"
     )
 
 
