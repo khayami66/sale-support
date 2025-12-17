@@ -235,20 +235,41 @@ class SheetsClient:
                           "shipping_cost": 送料, "commission": 手数料, "profit": 利益}
         """
         try:
-            worksheet = self._get_worksheet()
+            # キャッシュをクリアして最新のデータを取得
+            spreadsheet = self._get_spreadsheet()
+            worksheet = spreadsheet.sheet1
 
             # A列（管理番号）の全データを取得して検索
-            # find()は文字列検索のため、数値として保存された値にマッチしない場合がある
             col_a_values = worksheet.col_values(1)  # A列の全値を取得
             row_num = None
 
+            # 検索対象の管理番号を正規化（整数に変換可能なら整数として比較）
+            try:
+                target_id = int(float(management_id))
+            except (ValueError, TypeError):
+                target_id = str(management_id).strip()
+
+            print(f"[DEBUG] 検索対象の管理番号: {target_id} (type: {type(target_id)})")
+            print(f"[DEBUG] A列の値: {col_a_values[:10]}...")  # 最初の10件をログ出力
+
             for i, value in enumerate(col_a_values):
-                # 文字列に変換して比較（数値・文字列両方に対応）
-                if str(value).strip() == str(management_id).strip():
+                if i == 0:  # ヘッダー行をスキップ
+                    continue
+
+                # セルの値を正規化して比較
+                try:
+                    # 数値として比較を試みる（"215.0" → 215）
+                    cell_value = int(float(value))
+                except (ValueError, TypeError):
+                    cell_value = str(value).strip()
+
+                if cell_value == target_id:
                     row_num = i + 1  # gspreadは1始まり
+                    print(f"[DEBUG] 管理番号 {target_id} を行 {row_num} で発見")
                     break
 
             if row_num is None:
+                print(f"[DEBUG] 管理番号 {target_id} が見つかりませんでした")
                 return False, None
 
             # 仕入れ価格を取得（C列: インデックス3）
