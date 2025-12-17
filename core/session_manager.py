@@ -20,6 +20,7 @@ class SessionState(Enum):
     WAITING_MEASUREMENTS = "waiting_measurements"  # 実寸入力待ち
     CONFIRMING = "confirming"        # 確認待ち（修正・戦略選択待ち）
     GENERATING = "generating"        # 生成中
+    WAITING_SALE_INFO = "waiting_sale_info"  # 売却情報入力待ち
 
 
 @dataclass

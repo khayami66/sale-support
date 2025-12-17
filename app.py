@@ -134,6 +134,23 @@ def process_text_message(user_id: str, text: str, reply_token: str):
         handler.reply_text(reply_token, "セッションをリセットしました。\n商品画像と「仕入れ価格 管理番号」を送信してください。\n例: 画像 + 「880 222」")
         return
 
+    # 売却コマンド
+    if text.strip() in ["売却", "売れた", "販売完了"]:
+        session.reset()
+        handler.clear_user_images(user_id)
+        session.state = SessionState.WAITING_SALE_INFO
+        session_manager.update_session(session)
+        handler.reply_text(
+            reply_token,
+            "売却情報を入力してください。\n「管理番号 販売価格 送料」\n例: 「215 3000 700」"
+        )
+        return
+
+    # 売却情報入力待ち状態の場合
+    if session.state == SessionState.WAITING_SALE_INFO:
+        process_sale_info_input(user_id, text, reply_token, session)
+        return
+
     # 確認待ち状態の場合
     if session.state == SessionState.CONFIRMING:
         process_confirmation_response(user_id, text, reply_token, session)
@@ -320,6 +337,62 @@ def process_measurements_input(user_id: str, text: str, reply_token: str, sessio
         start_analysis(user_id, reply_token, session)
     except Exception as e:
         handler.reply_text(reply_token, f"エラーが発生しました: {str(e)}\n「リセット」と送信して最初からやり直してください。")
+
+
+def process_sale_info_input(user_id: str, text: str, reply_token: str, session: UserSession):
+    """
+    売却情報入力を処理する。
+    「管理番号 販売価格 送料」形式を期待。
+    """
+    handler = get_line_handler()
+
+    # 売却情報をパース
+    management_id, sale_price, shipping_cost = TextParser.parse_sale_info(text)
+
+    # 必要な情報が揃っているかチェック
+    if management_id is None or sale_price is None or shipping_cost is None:
+        handler.reply_text(
+            reply_token,
+            "入力形式が正しくありません。\n「管理番号 販売価格 送料」の順で入力してください。\n例: 「215 3000 700」"
+        )
+        return
+
+    # スプレッドシートを更新
+    try:
+        sheets_client = get_sheets_client()
+        success, sale_info = sheets_client.update_sale_info(
+            management_id=management_id,
+            sale_price=sale_price,
+            shipping_cost=shipping_cost,
+        )
+
+        if success and sale_info:
+            # 成功メッセージを返信
+            handler.reply_text(
+                reply_token,
+                f"売却を記録しました。\n\n"
+                f"管理番号: {management_id}\n"
+                f"販売価格: {sale_info['sale_price']:,}円\n"
+                f"送料: {sale_info['shipping_cost']:,}円\n"
+                f"手数料: {sale_info['commission']:,}円\n"
+                f"利益: {sale_info['profit']:,}円\n\n"
+                f"※スプレッドシートを更新しました"
+            )
+        else:
+            handler.reply_text(
+                reply_token,
+                f"管理番号「{management_id}」の商品が見つかりませんでした。\n"
+                f"管理番号を確認して再度入力してください。"
+            )
+    except Exception as e:
+        handler.reply_text(
+            reply_token,
+            f"エラーが発生しました: {str(e)}\n再度お試しください。"
+        )
+
+    # セッションをリセット
+    session.reset()
+    session_manager.update_session(session)
 
 
 def start_analysis(user_id: str, reply_token: str, session: UserSession):

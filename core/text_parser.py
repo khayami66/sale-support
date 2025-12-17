@@ -306,6 +306,24 @@ class TextParser:
 
         return measurements
 
+    @classmethod
+    def parse_sale_info(cls, text: str) -> tuple[Optional[str], Optional[int], Optional[int]]:
+        """
+        売却情報をパースする。
+        「管理番号 販売価格 送料」形式（例: "215 3000 700"）に対応。
+
+        Args:
+            text: ユーザー入力テキスト
+
+        Returns:
+            tuple: (管理番号, 販売価格, 送料)
+        """
+        numbers = cls.parse_simple_numbers(text, 3)
+        management_id = str(numbers[0]) if numbers[0] is not None else None
+        sale_price = numbers[1]
+        shipping_cost = numbers[2]
+        return management_id, sale_price, shipping_cost
+
 
 # テスト用
 if __name__ == "__main__":

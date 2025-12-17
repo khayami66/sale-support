@@ -54,6 +54,13 @@ class SheetsClient:
         "実寸_股下",
         "実寸_裾幅",
         "実寸_股上",
+        # 販売管理カラム
+        "ステータス",
+        "販売日",
+        "実際の販売価格",
+        "実際の送料",
+        "手数料",
+        "利益",
     ]
 
     def __init__(self):
@@ -177,6 +184,13 @@ class SheetsClient:
             measurements.inseam or "",                                # 実寸_股下
             measurements.hem_width or "",                             # 実寸_裾幅
             measurements.rise or "",                                  # 実寸_股上
+            # 販売管理カラム
+            "出品中",                                                  # ステータス
+            "",                                                        # 販売日
+            "",                                                        # 実際の販売価格
+            "",                                                        # 実際の送料
+            "",                                                        # 手数料
+            "",                                                        # 利益
         ]
 
     def test_connection(self) -> tuple[bool, str]:
@@ -200,6 +214,76 @@ class SheetsClient:
             return False, f"API Error: {e}"
         except Exception as e:
             return False, f"接続エラー: {e}"
+
+    def update_sale_info(
+        self,
+        management_id: str,
+        sale_price: int,
+        shipping_cost: int,
+    ) -> tuple[bool, Optional[dict]]:
+        """
+        売却情報を更新する。
+
+        Args:
+            management_id: 管理番号
+            sale_price: 実際の販売価格
+            shipping_cost: 実際の送料
+
+        Returns:
+            tuple[bool, Optional[dict]]: (成功/失敗, 売却情報または None)
+                売却情報: {"purchase_price": 仕入れ価格, "sale_price": 販売価格,
+                          "shipping_cost": 送料, "commission": 手数料, "profit": 利益}
+        """
+        try:
+            worksheet = self._get_worksheet()
+
+            # 管理番号でセルを検索（A列）
+            cell = worksheet.find(str(management_id), in_column=1)
+            if cell is None:
+                return False, None
+
+            row_num = cell.row
+
+            # 仕入れ価格を取得（C列: インデックス3）
+            purchase_price_str = worksheet.cell(row_num, 3).value
+            purchase_price = int(purchase_price_str) if purchase_price_str else 0
+
+            # 手数料を計算（販売価格の10%）
+            commission = int(sale_price * 0.1)
+
+            # 利益を計算（販売価格 - 仕入れ価格 - 送料 - 手数料）
+            profit = sale_price - purchase_price - shipping_cost - commission
+
+            # 販売日
+            sale_date = datetime.now().strftime("%Y-%m-%d")
+
+            # カラムのインデックスを取得
+            status_col = self.HEADERS.index("ステータス") + 1
+            sale_date_col = self.HEADERS.index("販売日") + 1
+            sale_price_col = self.HEADERS.index("実際の販売価格") + 1
+            shipping_col = self.HEADERS.index("実際の送料") + 1
+            commission_col = self.HEADERS.index("手数料") + 1
+            profit_col = self.HEADERS.index("利益") + 1
+
+            # 更新するセルの範囲を一括更新
+            worksheet.update_cell(row_num, status_col, "売却済み")
+            worksheet.update_cell(row_num, sale_date_col, sale_date)
+            worksheet.update_cell(row_num, sale_price_col, sale_price)
+            worksheet.update_cell(row_num, shipping_col, shipping_cost)
+            worksheet.update_cell(row_num, commission_col, commission)
+            worksheet.update_cell(row_num, profit_col, profit)
+
+            return True, {
+                "purchase_price": purchase_price,
+                "sale_price": sale_price,
+                "shipping_cost": shipping_cost,
+                "commission": commission,
+                "profit": profit,
+            }
+
+        except Exception as e:
+            print(f"売却情報の更新に失敗しました: {e}")
+            return False, None
 
 
 # シングルトンインスタンス
