@@ -55,12 +55,13 @@ class ImageAnalyzer:
         category = self._parse_category(ai_result.get("category", "トップス"))
 
         # ProductFeaturesを構築
+        # 性別・サイズはテキストを優先し、なければAI推定を使用
         features = ProductFeatures(
             brand=ai_result.get("brand", "UNKNOWN"),
             category=category,
             item_type=ai_result.get("item_type", "UNKNOWN"),
-            gender=parsed["gender"] or "UNKNOWN",  # テキストから取得を優先
-            size=parsed["size"] or "UNKNOWN",  # テキストから取得を優先
+            gender=parsed["gender"] or ai_result.get("gender", "UNKNOWN"),
+            size=parsed["size"] or ai_result.get("size", "UNKNOWN"),
             color=ai_result.get("color", "UNKNOWN"),
             design=ai_result.get("design"),
             material=ai_result.get("material"),
