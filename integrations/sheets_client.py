@@ -108,7 +108,7 @@ class SheetsClient:
         return self._worksheet
 
     def _ensure_headers(self):
-        """ヘッダー行が存在しない場合は追加する"""
+        """ヘッダー行が存在しない場合は追加する。不足カラムがあれば追加する。"""
         worksheet = self._worksheet
         if worksheet is None:
             return
@@ -119,6 +119,13 @@ class SheetsClient:
         # ヘッダーがなければ追加
         if not first_row or first_row[0] != self.HEADERS[0]:
             worksheet.insert_row(self.HEADERS, 1)
+        elif len(first_row) < len(self.HEADERS):
+            # 不足しているカラムを追加
+            missing_headers = self.HEADERS[len(first_row):]
+            start_col = len(first_row) + 1
+            for i, header in enumerate(missing_headers):
+                worksheet.update_cell(1, start_col + i, header)
+            print(f"[INFO] 不足カラムを追加しました: {missing_headers}")
 
     def save_product(self, product: Product) -> bool:
         """
@@ -236,8 +243,8 @@ class SheetsClient:
         """
         try:
             # キャッシュをクリアして最新のデータを取得
-            spreadsheet = self._get_spreadsheet()
-            worksheet = spreadsheet.sheet1
+            self._worksheet = None  # キャッシュをクリア
+            worksheet = self._get_worksheet()  # ヘッダー確認も行われる
 
             # A列（管理番号）の全データを取得して検索
             col_a_values = worksheet.col_values(1)  # A列の全値を取得
