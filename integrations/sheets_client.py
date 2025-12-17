@@ -237,12 +237,19 @@ class SheetsClient:
         try:
             worksheet = self._get_worksheet()
 
-            # 管理番号でセルを検索（A列）
-            cell = worksheet.find(str(management_id), in_column=1)
-            if cell is None:
-                return False, None
+            # A列（管理番号）の全データを取得して検索
+            # find()は文字列検索のため、数値として保存された値にマッチしない場合がある
+            col_a_values = worksheet.col_values(1)  # A列の全値を取得
+            row_num = None
 
-            row_num = cell.row
+            for i, value in enumerate(col_a_values):
+                # 文字列に変換して比較（数値・文字列両方に対応）
+                if str(value).strip() == str(management_id).strip():
+                    row_num = i + 1  # gspreadは1始まり
+                    break
+
+            if row_num is None:
+                return False, None
 
             # 仕入れ価格を取得（C列: インデックス3）
             purchase_price_str = worksheet.cell(row_num, 3).value
