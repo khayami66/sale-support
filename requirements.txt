@@ -10,6 +10,7 @@ openai>=1.0.0
 
 # Google Sheets & Drive
 gspread>=5.0.0
+gspread-formatting>=1.1.0
 google-auth>=2.0.0
 google-api-python-client>=2.0.0
 

@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Optional
 
 import gspread
+from gspread.utils import rowcol_to_a1
+from gspread_formatting import CellFormat, Color, format_cell_range
 from google.oauth2.service_account import Credentials
 
 from config import Config
@@ -313,6 +315,14 @@ class SheetsClient:
             worksheet.update_cell(row_num, shipping_col, shipping_cost)
             worksheet.update_cell(row_num, commission_col, commission)
             worksheet.update_cell(row_num, profit_col, profit)
+
+            # 売却済みの行を薄いグレーに変更
+            last_col = len(self.HEADERS)
+            start_cell = rowcol_to_a1(row_num, 1)  # A列
+            end_cell = rowcol_to_a1(row_num, last_col)  # 最終列
+            gray_format = CellFormat(backgroundColor=Color(0.9, 0.9, 0.9))
+            format_cell_range(worksheet, f"{start_cell}:{end_cell}", gray_format)
+            print(f"[INFO] 行 {row_num} の背景色をグレーに変更しました")
 
             return True, {
                 "purchase_price": purchase_price,
