@@ -893,6 +893,166 @@ size=parsed["size"] or ai_result.get("size", "UNKNOWN"),
 
 ---
 
+## Phase 9: 販売管理・売却入力機能（2025-12-19）
+
+### 9.1 機能要件の確認
+
+**追加機能**:
+1. 販売管理カラムの追加（ステータス、販売日、実際の販売価格、送料、手数料、利益）
+2. 売却完了時のLINE入力機能（2ステップ対話形式）
+
+**採用方式**:
+- 既存シートにカラム追加
+- 2ステップ対話形式: 「売却」→「管理番号 販売価格 送料」
+
+---
+
+### 9.2 実装内容
+
+#### スプレッドシートカラムの追加
+
+**`integrations/sheets_client.py`のHEADERS追加**:
+```python
+HEADERS = [
+    # ...既存カラム...
+    # 販売管理カラム
+    "ステータス",
+    "販売日",
+    "実際の販売価格",
+    "実際の送料",
+    "手数料",
+    "利益",
+]
+```
+
+**`_product_to_row()`の修正**:
+- 商品登録時にステータスを「出品中」に自動設定
+
+#### セッション状態の追加
+
+**`core/session_manager.py`**:
+```python
+class SessionState(Enum):
+    # ...既存状態...
+    WAITING_SALE_INFO = "waiting_sale_info"  # 売却情報入力待ち
+```
+
+#### 売却情報パーサーの追加
+
+**`core/text_parser.py`**:
+```python
+@classmethod
+def parse_sale_info(cls, text: str) -> tuple[Optional[str], Optional[int], Optional[int]]:
+    """「管理番号 販売価格 送料」形式をパース"""
+    numbers = cls.parse_simple_numbers(text, 3)
+    management_id = str(numbers[0]) if numbers[0] is not None else None
+    sale_price = numbers[1]
+    shipping_cost = numbers[2]
+    return management_id, sale_price, shipping_cost
+```
+
+#### 売却コマンド処理の追加
+
+**`app.py`**:
+```python
+# 売却コマンド
+if text.strip() in ["売却", "売れた", "販売完了"]:
+    session.state = SessionState.WAITING_SALE_INFO
+    handler.reply_text(reply_token, "売却情報を入力してください。\n「管理番号 販売価格 送料」\n例: 「215 3000 700」")
+    return
+
+# 売却情報入力待ち状態の処理
+if session.state == SessionState.WAITING_SALE_INFO:
+    process_sale_info_input(user_id, text, reply_token, session)
+    return
+```
+
+#### 売却情報更新メソッドの追加
+
+**`integrations/sheets_client.py`**:
+```python
+def update_sale_info(self, management_id: str, sale_price: int, shipping_cost: int):
+    """売却情報をスプレッドシートに反映"""
+    # 手数料を計算（販売価格の10%）
+    commission = int(sale_price * 0.1)
+    # 利益を計算（販売価格 - 仕入れ価格 - 送料 - 手数料）
+    profit = sale_price - purchase_price - shipping_cost - commission
+    # スプレッドシートを更新
+```
+
+---
+
+### 9.3 発生したエラーと解決
+
+#### エラー1: 管理番号が見つからない
+
+**症状**: 正しい管理番号を送信しても「見つかりませんでした」と返される
+
+**原因**: `worksheet.find()`は文字列検索のため、数値として保存された管理番号にマッチしない
+
+**解決方法**: A列の全データを取得し、数値に変換して比較
+```python
+col_a_values = worksheet.col_values(1)
+for i, value in enumerate(col_a_values):
+    try:
+        cell_value = int(float(value))  # "215.0" → 215
+    except:
+        cell_value = str(value).strip()
+    if cell_value == target_id:
+        row_num = i + 1
+        break
+```
+
+---
+
+#### エラー2: グリッドの限界を超えています
+
+**症状**:
+```
+APIError: [400]: Range ('シート1'!AC7)はグリッドの限界を超えています。最大列数:28
+```
+
+**原因**: スプレッドシートのグリッドが28列までしかなく、29列目以降（販売日など）に書き込めない
+
+**解決方法**: `worksheet.add_cols()`でグリッドを拡張してからカラムを追加
+```python
+def _ensure_headers(self):
+    # ...
+    if current_cols < required_cols:
+        cols_to_add = required_cols - current_cols
+        worksheet.add_cols(cols_to_add)
+        print(f"[INFO] グリッドを拡張: {current_cols}列 → {required_cols}列")
+```
+
+---
+
+### 9.4 売却フロー
+
+```
+1. [ユーザー] 売却
+2. [システム] 売却情報を入力してください。
+              「管理番号 販売価格 送料」
+              例: 「215 3000 700」
+3. [ユーザー] 215 3000 700
+4. [システム] 売却を記録しました。
+
+              管理番号: 215
+              販売価格: 3,000円
+              送料: 700円
+              手数料: 300円
+              利益: 1,120円
+
+              ※スプレッドシートを更新しました
+```
+
+---
+
+### 9.5 その他の改善
+
+- 「商品説明」カラムを削除（ハッシュタグ・実寸は別カラムにあるため）
+
+---
+
 ## 今後の拡張予定
 
 詳細は `docs/future_enhancements.md` を参照。
@@ -901,9 +1061,9 @@ size=parsed["size"] or ai_result.get("size", "UNKNOWN"),
 |------|------|------|
 | 複数画像対応 | ✅ 完了 | 画像を静かに蓄積、返信は1回のみ |
 | サイズ正規化・性別推定 | ✅ 完了 | AIがサイズと性別を自動推定 |
+| 販売管理機能 | ✅ 完了 | ステータス・販売価格・利益の管理 |
+| 売却完了時のLINE入力 | ✅ 完了 | 「売却」→「215 3000 700」形式 |
 | スプレッドシートへの画像保存 | 未着手 | Cloudinaryなど別サービスの検討 |
-| 販売管理機能 | 未着手 | 販売価格・利益の管理 |
-| 販売完了時のLINE入力 | 未着手 | 「売れた 215 3000 700」形式 |
 
 ---
 
@@ -916,4 +1076,4 @@ size=parsed["size"] or ai_result.get("size", "UNKNOWN"),
 
 ---
 
-*最終更新日: 2025-12-18*
+*最終更新日: 2025-12-19*
