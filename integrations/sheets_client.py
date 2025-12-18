@@ -120,7 +120,15 @@ class SheetsClient:
         if not first_row or first_row[0] != self.HEADERS[0]:
             worksheet.insert_row(self.HEADERS, 1)
         elif len(first_row) < len(self.HEADERS):
-            # 不足しているカラムを追加
+            # グリッドのカラム数を確認し、必要なら拡張
+            current_cols = worksheet.col_count
+            required_cols = len(self.HEADERS)
+            if current_cols < required_cols:
+                cols_to_add = required_cols - current_cols
+                worksheet.add_cols(cols_to_add)
+                print(f"[INFO] グリッドを拡張: {current_cols}列 → {required_cols}列")
+
+            # 不足しているヘッダーを追加
             missing_headers = self.HEADERS[len(first_row):]
             start_col = len(first_row) + 1
             for i, header in enumerate(missing_headers):
