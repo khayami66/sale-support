@@ -40,7 +40,6 @@ class SheetsClient:
         "年代",
         "戦略",
         "商品名",
-        "商品説明",
         "ハッシュタグ",
         "スタート価格",
         "想定販売価格",
@@ -185,7 +184,6 @@ class SheetsClient:
             features.era or "",                                       # 年代
             price.strategy.value if price else "",                    # 戦略
             product.title,                                            # 商品名
-            product.description,                                      # 商品説明
             hashtags_str,                                             # ハッシュタグ
             price.start_price if price else "",                       # スタート価格
             price.expected_price if price else "",                    # 想定販売価格
