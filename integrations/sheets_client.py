@@ -150,10 +150,49 @@ class SheetsClient:
             worksheet = self._get_worksheet()
             row_data = self._product_to_row(product)
             worksheet.append_row(row_data, value_input_option="USER_ENTERED")
+
+            # 画像がある場合は行の高さを調整
+            if product.image_url:
+                self._set_row_height_for_image(worksheet)
+
             return True
         except Exception as e:
             print(f"スプレッドシートへの保存に失敗しました: {e}")
             return False
+
+    def _set_row_height_for_image(self, worksheet: gspread.Worksheet, height_px: int = 110):
+        """
+        最後の行の高さを画像サイズに合わせて調整する。
+
+        Args:
+            worksheet: ワークシート
+            height_px: 行の高さ（ピクセル）
+        """
+        try:
+            # 最後の行番号を取得
+            last_row = len(worksheet.get_all_values())
+
+            # Sheets APIで行の高さを設定
+            spreadsheet = self._get_spreadsheet()
+            spreadsheet.batch_update({
+                "requests": [{
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": worksheet.id,
+                            "dimension": "ROWS",
+                            "startIndex": last_row - 1,  # 0-based index
+                            "endIndex": last_row
+                        },
+                        "properties": {
+                            "pixelSize": height_px
+                        },
+                        "fields": "pixelSize"
+                    }
+                }]
+            })
+            print(f"[INFO] 行 {last_row} の高さを {height_px}px に設定しました")
+        except Exception as e:
+            print(f"[WARNING] 行の高さ調整に失敗しました: {e}")
 
     def _product_to_row(self, product: Product) -> list:
         """
