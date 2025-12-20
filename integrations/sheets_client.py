@@ -172,10 +172,10 @@ class SheetsClient:
         # ハッシュタグをスペース区切りの文字列に変換
         hashtags_str = " ".join(product.hashtags) if product.hashtags else ""
 
-        # 画像URLがあればIMAGE関数を使用
+        # 画像URLがあればIMAGE関数を使用（モード4: 幅100px、高さ100pxで表示）
         image_formula = ""
         if product.image_url:
-            image_formula = f'=IMAGE("{product.image_url}")'
+            image_formula = f'=IMAGE("{product.image_url}", 4, 100, 100)'
 
         return [
             product.management_id,                                    # 管理番号
@@ -293,8 +293,9 @@ class SheetsClient:
                 print(f"[DEBUG] 管理番号 {target_id} が見つかりませんでした")
                 return False, None
 
-            # 仕入れ価格を取得（D列: インデックス4）※画像カラム追加後
-            purchase_price_str = worksheet.cell(row_num, 4).value
+            # 仕入れ価格を取得（HEADERSから動的に取得）
+            purchase_price_col = self.HEADERS.index("仕入れ価格") + 1
+            purchase_price_str = worksheet.cell(row_num, purchase_price_col).value
             purchase_price = int(purchase_price_str) if purchase_price_str else 0
 
             # 手数料を計算（販売価格の10%）
