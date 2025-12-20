@@ -247,21 +247,25 @@ class TextParser:
         return result
 
     @classmethod
-    def parse_price_and_id(cls, text: str) -> tuple[Optional[int], Optional[str]]:
+    def parse_price_and_id(cls, text: str) -> tuple[Optional[int], Optional[str], Optional[str]]:
         """
-        シンプル入力から仕入れ価格と管理番号を抽出する。
-        「880 222」のような形式に対応。
+        シンプル入力から仕入れ価格、管理番号、年代（オプション）を抽出する。
+        「880 222」または「880 222 90s」のような形式に対応。
 
         Args:
             text: ユーザー入力テキスト
 
         Returns:
-            tuple: (仕入れ価格, 管理番号)
+            tuple: (仕入れ価格, 管理番号, 年代)
         """
         numbers = cls.parse_simple_numbers(text, 2)
         purchase_price = numbers[0]
         management_id = str(numbers[1]) if numbers[1] is not None else None
-        return purchase_price, management_id
+
+        # 年代を抽出（オプション）
+        era = cls.parse_era(text)
+
+        return purchase_price, management_id, era
 
     @classmethod
     def parse_measurements_simple(cls, text: str, category: str) -> Measurements:

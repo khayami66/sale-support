@@ -131,7 +131,7 @@ def process_text_message(user_id: str, text: str, reply_token: str):
         session.reset()
         handler.clear_user_images(user_id)
         session_manager.update_session(session)
-        handler.reply_text(reply_token, "セッションをリセットしました。\n商品画像と「仕入れ価格 管理番号」を送信してください。\n例: 画像 + 「880 222」")
+        handler.reply_text(reply_token, "セッションをリセットしました。\n商品画像と「仕入れ価格 管理番号」を送信してください。\n例: 「880 222」または「880 222 90s」")
         return
 
     # 売却コマンド
@@ -162,13 +162,15 @@ def process_text_message(user_id: str, text: str, reply_token: str):
         return
 
     # IDLE または COLLECTING 状態の場合
-    # シンプル入力から価格と管理番号を抽出
-    price, mgmt_id = TextParser.parse_price_and_id(text)
+    # シンプル入力から価格、管理番号、年代（オプション）を抽出
+    price, mgmt_id, era = TextParser.parse_price_and_id(text)
 
     if price is not None:
         session.purchase_price = price
     if mgmt_id is not None:
         session.management_id = mgmt_id
+    if era is not None:
+        session.era = era
 
     # 従来形式のパースも試す（性別、サイズ、年代、実寸）
     parsed = TextParser.parse_all(text)
@@ -176,7 +178,7 @@ def process_text_message(user_id: str, text: str, reply_token: str):
         session.gender = parsed["gender"]
     if parsed["size"]:
         session.size = parsed["size"]
-    if parsed["era"]:
+    if parsed["era"] and session.era is None:  # シンプル入力で年代がなければ従来形式から取得
         session.era = parsed["era"]
     if parsed["measurements"] and (parsed["measurements"].has_tops_measurements() or parsed["measurements"].has_pants_measurements()):
         session.measurements = parsed["measurements"]
@@ -213,7 +215,7 @@ def process_text_message(user_id: str, text: str, reply_token: str):
             handler.reply_text(
                 reply_token,
                 f"受け付けました。\n\n不足している情報:\n・" + "\n・".join(missing) +
-                "\n\n画像と「仕入れ価格 管理番号」を送信してください。\n例: 「880 222」"
+                "\n\n画像と「仕入れ価格 管理番号」を送信してください。\n例: 「880 222」または「880 222 90s」"
             )
         else:
             handler.reply_text(reply_token, "受け付けました。")
