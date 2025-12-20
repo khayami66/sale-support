@@ -175,7 +175,8 @@ class Product:
     price_suggestion: Optional[PriceSuggestion] = None  # 価格提案
 
     # メタ情報
-    image_paths: list[str] = field(default_factory=list)  # 画像パス
+    image_paths: list[str] = field(default_factory=list)  # 画像パス（ローカル）
+    image_url: Optional[str] = None              # Cloudinary画像URL
     raw_text: str = ""                           # 元のテキスト入力
 
     def to_dict(self) -> dict:

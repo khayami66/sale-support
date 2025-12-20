@@ -27,10 +27,10 @@ class SheetsClient:
     ]
 
     # スプレッドシートのヘッダー（カラム順序）
-    # TODO: 画像カラムは将来実装時に追加
     HEADERS = [
         "管理番号",
         "登録日時",
+        "画像",            # Cloudinaryにアップロードした画像
         "仕入れ価格",
         "ブランド",
         "カテゴリ",
@@ -172,9 +172,15 @@ class SheetsClient:
         # ハッシュタグをスペース区切りの文字列に変換
         hashtags_str = " ".join(product.hashtags) if product.hashtags else ""
 
+        # 画像URLがあればIMAGE関数を使用
+        image_formula = ""
+        if product.image_url:
+            image_formula = f'=IMAGE("{product.image_url}")'
+
         return [
             product.management_id,                                    # 管理番号
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),            # 登録日時
+            image_formula,                                            # 画像（IMAGE関数）
             product.purchase_price,                                   # 仕入れ価格
             features.brand,                                           # ブランド
             features.category.value,                                  # カテゴリ
@@ -287,8 +293,8 @@ class SheetsClient:
                 print(f"[DEBUG] 管理番号 {target_id} が見つかりませんでした")
                 return False, None
 
-            # 仕入れ価格を取得（C列: インデックス3）
-            purchase_price_str = worksheet.cell(row_num, 3).value
+            # 仕入れ価格を取得（D列: インデックス4）※画像カラム追加後
+            purchase_price_str = worksheet.cell(row_num, 4).value
             purchase_price = int(purchase_price_str) if purchase_price_str else 0
 
             # 手数料を計算（販売価格の10%）

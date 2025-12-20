@@ -29,6 +29,11 @@ class Config:
     # Google Drive設定
     GOOGLE_DRIVE_FOLDER_ID: str = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
 
+    # Cloudinary設定
+    CLOUDINARY_CLOUD_NAME: str = os.getenv("CLOUDINARY_CLOUD_NAME", "")
+    CLOUDINARY_API_KEY: str = os.getenv("CLOUDINARY_API_KEY", "")
+    CLOUDINARY_API_SECRET: str = os.getenv("CLOUDINARY_API_SECRET", "")
+
     # 価格計算設定
     SHIPPING_COST: int = int(os.getenv("SHIPPING_COST", "500"))  # 送料（円）
     MINIMUM_PROFIT: int = int(os.getenv("MINIMUM_PROFIT", "200"))  # 最低利益（円）

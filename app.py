@@ -35,8 +35,7 @@ from models.product import Product, Measurements, Category
 from integrations.line_handler import LineHandler
 from integrations.openai_client import OpenAIClient
 from integrations.sheets_client import get_sheets_client
-# TODO: 画像保存機能は将来実装
-# from integrations.drive_client import get_drive_client, DriveClient
+from integrations.cloudinary_client import get_cloudinary_client
 
 
 # 環境変数を読み込む
@@ -536,20 +535,21 @@ def generate_product_info(
     messages = handler.format_result_message(product.to_dict())
     handler.reply_multiple(reply_token, messages)
 
-    # TODO: 画像保存機能は将来実装（サービスアカウントのストレージ制限のため一旦無効化）
-    # Google Driveに画像をアップロード
-    # image_formula = ""
-    # try:
-    #     drive_client = get_drive_client()
-    #     image_ids = drive_client.upload_images(
-    #         session.image_paths,
-    #         product.management_id,
-    #     )
-    #     if image_ids:
-    #         image_formula = DriveClient.get_images_formula(image_ids)
-    #         print(f"画像をGoogle Driveにアップロードしました: {len(image_ids)}枚")
-    # except Exception as e:
-    #     print(f"画像アップロードエラー: {e}")
+    # Cloudinaryに1枚目の画像をアップロード
+    if session.image_paths:
+        try:
+            cloudinary_client = get_cloudinary_client()
+            first_image_path = session.image_paths[0]
+            # 管理番号をpublic_idとして使用
+            image_url = cloudinary_client.upload_image(
+                first_image_path,
+                public_id=product.management_id,
+            )
+            if image_url:
+                product.image_url = image_url
+                print(f"画像をCloudinaryにアップロードしました: {image_url}")
+        except Exception as e:
+            print(f"Cloudinaryアップロードエラー: {e}")
 
     # Googleスプレッドシートに保存
     try:
