@@ -1047,7 +1047,39 @@ def _ensure_headers(self):
 
 ---
 
-### 9.5 その他の改善
+### 9.5 売却済み行の色変更機能
+
+**要件**: 売却済みになった行を視覚的に区別したい
+
+**実装内容**:
+- `gspread-formatting`ライブラリを追加
+- 売却処理完了時に該当行の背景色を薄いグレーに自動変更
+
+**`requirements.txt`に追加**:
+```
+gspread-formatting>=1.1.0
+```
+
+**`integrations/sheets_client.py`の修正**:
+```python
+from gspread.utils import rowcol_to_a1
+from gspread_formatting import CellFormat, Color, format_cell_range
+
+# 売却済みの行を薄いグレーに変更
+last_col = len(self.HEADERS)
+start_cell = rowcol_to_a1(row_num, 1)  # A列
+end_cell = rowcol_to_a1(row_num, last_col)  # 最終列
+gray_format = CellFormat(backgroundColor=Color(0.9, 0.9, 0.9))
+format_cell_range(worksheet, f"{start_cell}:{end_cell}", gray_format)
+```
+
+**技術的なポイント**:
+- `rowcol_to_a1()`を使用してカラム番号をA1形式に変換（26列以上にも対応: AA, AB等）
+- `Color(0.9, 0.9, 0.9)`で薄いグレーを指定（RGB各値は0〜1の範囲）
+
+---
+
+### 9.6 その他の改善
 
 - 「商品説明」カラムを削除（ハッシュタグ・実寸は別カラムにあるため）
 
@@ -1063,6 +1095,7 @@ def _ensure_headers(self):
 | サイズ正規化・性別推定 | ✅ 完了 | AIがサイズと性別を自動推定 |
 | 販売管理機能 | ✅ 完了 | ステータス・販売価格・利益の管理 |
 | 売却完了時のLINE入力 | ✅ 完了 | 「売却」→「215 3000 700」形式 |
+| 売却済み行の色変更 | ✅ 完了 | 売却済み行を自動でグレーに変更 |
 | スプレッドシートへの画像保存 | 未着手 | Cloudinaryなど別サービスの検討 |
 
 ---
@@ -1076,4 +1109,4 @@ def _ensure_headers(self):
 
 ---
 
-*最終更新日: 2025-12-19*
+*最終更新日: 2025-12-20*
