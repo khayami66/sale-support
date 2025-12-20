@@ -1129,6 +1129,213 @@ if era is not None:
 
 ---
 
+## Phase 10: Cloudinary画像保存機能（2025-12-21）
+
+### 10.1 機能要件の確認
+
+**課題**: LINEで送信した画像をスプレッドシートに保存したい
+
+**検討した方式**:
+| 方式 | 問題点 |
+|------|--------|
+| Google Drive | サービスアカウントはストレージを持てない |
+| Google Photos | 同様にサービスアカウント制限 |
+| Cloudinary | 無料枠あり、API経由でアップロード可能 |
+
+**採用**: Cloudinary（画像ホスティングサービス）
+
+---
+
+### 10.2 実装内容
+
+#### 新規ファイル作成
+
+**`integrations/cloudinary_client.py`**:
+```python
+class CloudinaryClient:
+    def upload_image(self, file_path: str, public_id: Optional[str] = None) -> Optional[str]:
+        """画像をCloudinaryにアップロードし、URLを返す"""
+        options = {
+            "folder": "mercari_products",
+            "resource_type": "image",
+        }
+        if public_id:
+            options["public_id"] = public_id
+        result = cloudinary.uploader.upload(file_path, **options)
+        return result.get("secure_url")
+
+    def get_image_formula(self, url: str) -> str:
+        """スプレッドシートのIMAGE関数を生成"""
+        return f'=IMAGE("{url}")'
+```
+
+#### 設定ファイルの更新
+
+**`config.py`に追加**:
+```python
+# Cloudinary設定
+CLOUDINARY_CLOUD_NAME: str = os.getenv("CLOUDINARY_CLOUD_NAME", "")
+CLOUDINARY_API_KEY: str = os.getenv("CLOUDINARY_API_KEY", "")
+CLOUDINARY_API_SECRET: str = os.getenv("CLOUDINARY_API_SECRET", "")
+```
+
+**`requirements.txt`に追加**:
+```
+cloudinary>=1.36.0
+```
+
+#### スプレッドシートの更新
+
+**`integrations/sheets_client.py`の修正**:
+
+1. HEADERSに「画像」カラムを3列目に追加（登録日時と仕入れ価格の間）
+```python
+HEADERS = [
+    "管理番号",
+    "登録日時",
+    "画像",            # 新規追加
+    "仕入れ価格",
+    # ...
+]
+```
+
+2. IMAGE関数でサイズを指定（100x100px）
+```python
+# 画像URLがあればIMAGE関数を使用（モード4: 幅100px、高さ100pxで表示）
+if product.image_url:
+    image_formula = f'=IMAGE("{product.image_url}", 4, 100, 100)'
+```
+
+3. 仕入れ価格のカラム取得を動的に変更
+```python
+# 修正前（ハードコード）
+purchase_price_str = worksheet.cell(row_num, 4).value
+
+# 修正後（動的取得）
+purchase_price_col = self.HEADERS.index("仕入れ価格") + 1
+purchase_price_str = worksheet.cell(row_num, purchase_price_col).value
+```
+
+#### Productモデルの更新
+
+**`models/product.py`に追加**:
+```python
+# メタ情報
+image_paths: list[str] = field(default_factory=list)  # 画像パス（ローカル）
+image_url: Optional[str] = None                        # Cloudinary画像URL（新規追加）
+```
+
+#### app.pyの更新
+
+```python
+from integrations.cloudinary_client import get_cloudinary_client
+
+# 商品情報生成後、Cloudinaryに1枚目の画像をアップロード
+if session.image_paths:
+    try:
+        cloudinary_client = get_cloudinary_client()
+        first_image_path = session.image_paths[0]
+        image_url = cloudinary_client.upload_image(
+            first_image_path,
+            public_id=product.management_id,
+        )
+        if image_url:
+            product.image_url = image_url
+    except Exception as e:
+        print(f"Cloudinaryアップロードエラー: {e}")
+```
+
+---
+
+### 10.3 行の高さ自動調整機能
+
+**課題**: 画像が行に合わせて小さく表示される
+
+**解決方法**: 商品登録時に行の高さを自動で110pxに設定
+
+**`integrations/sheets_client.py`に追加**:
+```python
+def _set_row_height_for_image(self, worksheet: gspread.Worksheet, height_px: int = 110):
+    """最後の行の高さを画像サイズに合わせて調整する"""
+    last_row = len(worksheet.get_all_values())
+    spreadsheet = self._get_spreadsheet()
+    spreadsheet.batch_update({
+        "requests": [{
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": worksheet.id,
+                    "dimension": "ROWS",
+                    "startIndex": last_row - 1,
+                    "endIndex": last_row
+                },
+                "properties": {
+                    "pixelSize": height_px
+                },
+                "fields": "pixelSize"
+            }
+        }]
+    })
+```
+
+**save_product()での呼び出し**:
+```python
+def save_product(self, product: Product) -> bool:
+    # ...
+    worksheet.append_row(row_data, value_input_option="USER_ENTERED")
+
+    # 画像がある場合は行の高さを調整
+    if product.image_url:
+        self._set_row_height_for_image(worksheet)
+```
+
+---
+
+### 10.4 環境変数の設定
+
+**ローカル開発（.env）**:
+```
+CLOUDINARY_CLOUD_NAME=xxxxx
+CLOUDINARY_API_KEY=xxxxx
+CLOUDINARY_API_SECRET=xxxxx
+```
+
+**本番環境（Render）**:
+- Renderダッシュボードで同じ3つの環境変数を設定
+
+---
+
+### 10.5 完成したフロー
+
+```
+1. [ユーザー] 画像を送信（複数可）
+2. [ユーザー] 880 222
+3. [システム] カテゴリ判定、実寸入力促す
+4. [ユーザー] 60 50 42 20
+5. [システム] AI推定結果を表示
+6. [ユーザー] B（戦略選択）
+7. [システム] 商品情報を生成
+8. [内部処理] 1枚目の画像をCloudinaryにアップロード
+9. [内部処理] スプレッドシートに保存（画像URL含む）
+10. [内部処理] 行の高さを110pxに自動調整
+11. [システム] 結果をLINEに返信
+```
+
+---
+
+### 10.6 技術的なポイント
+
+**IMAGE関数のモード**:
+- モード1: セルに合わせてリサイズ（アスペクト比維持）
+- モード2: セルに合わせて引き伸ばし（アスペクト比無視）
+- モード3: 元のサイズ（切り取りの可能性あり）
+- モード4: 幅と高さを指定（ピクセル単位）
+
+**Sheets API batch_update**:
+- `updateDimensionProperties`で行/列のサイズを変更可能
+- `startIndex`と`endIndex`は0ベースのインデックス
+
+---
+
 ## 今後の拡張予定
 
 詳細は `docs/future_enhancements.md` を参照。
@@ -1141,7 +1348,8 @@ if era is not None:
 | 売却完了時のLINE入力 | ✅ 完了 | 「売却」→「215 3000 700」形式 |
 | 売却済み行の色変更 | ✅ 完了 | 売却済み行を自動でグレーに変更 |
 | 年代オプション入力 | ✅ 完了 | 「880 222 90s」形式で年代を任意入力 |
-| スプレッドシートへの画像保存 | 未着手 | Cloudinaryなど別サービスの検討 |
+| スプレッドシートへの画像保存 | ✅ 完了 | Cloudinary経由で画像を保存・表示 |
+| 行の高さ自動調整 | ✅ 完了 | 画像サイズに合わせて行を110pxに設定 |
 
 ---
 
@@ -1154,4 +1362,4 @@ if era is not None:
 
 ---
 
-*最終更新日: 2025-12-20*
+*最終更新日: 2025-12-21*
