@@ -1079,7 +1079,51 @@ format_cell_range(worksheet, f"{start_cell}:{end_cell}", gray_format)
 
 ---
 
-### 9.6 その他の改善
+### 9.6 年代オプション入力機能
+
+**課題**: 年代カラムがあるがLINEで入力する機会がない
+
+**検討結果**:
+- 年代は検索キーワードとして価値がある（90s, 80s等）
+- ヴィンテージ品の価格に影響する
+- ただし必須ではなく、知っている場合だけ入力できるべき
+
+**採用方式**: 価格・管理番号入力時にオプションで年代を追加
+
+**入力例**:
+```
+従来: 「880 222」
+新規: 「880 222 90s」（年代はオプション）
+```
+
+**実装内容**:
+
+**`core/text_parser.py`の修正**:
+```python
+@classmethod
+def parse_price_and_id(cls, text: str) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    """「880 222」または「880 222 90s」形式をパース"""
+    numbers = cls.parse_simple_numbers(text, 2)
+    purchase_price = numbers[0]
+    management_id = str(numbers[1]) if numbers[1] is not None else None
+    era = cls.parse_era(text)  # 年代を抽出（オプション）
+    return purchase_price, management_id, era
+```
+
+**`app.py`の修正**:
+```python
+price, mgmt_id, era = TextParser.parse_price_and_id(text)
+if era is not None:
+    session.era = era
+```
+
+**対応する年代フォーマット**:
+- `90s`, `80s`, `70s` など
+- `90年代`, `2000年代` など
+
+---
+
+### 9.7 その他の改善
 
 - 「商品説明」カラムを削除（ハッシュタグ・実寸は別カラムにあるため）
 
@@ -1096,6 +1140,7 @@ format_cell_range(worksheet, f"{start_cell}:{end_cell}", gray_format)
 | 販売管理機能 | ✅ 完了 | ステータス・販売価格・利益の管理 |
 | 売却完了時のLINE入力 | ✅ 完了 | 「売却」→「215 3000 700」形式 |
 | 売却済み行の色変更 | ✅ 完了 | 売却済み行を自動でグレーに変更 |
+| 年代オプション入力 | ✅ 完了 | 「880 222 90s」形式で年代を任意入力 |
 | スプレッドシートへの画像保存 | 未着手 | Cloudinaryなど別サービスの検討 |
 
 ---
