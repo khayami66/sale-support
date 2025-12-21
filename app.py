@@ -14,7 +14,7 @@ from pathlib import Path
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent))
 
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 from dotenv import load_dotenv
 
 from linebot.v3.exceptions import InvalidSignatureError
@@ -31,6 +31,12 @@ from core.description_generator import DescriptionGenerator
 from core.pricing import PricingCalculator
 from core.feature_refiner import FeatureRefiner
 from core.session_manager import session_manager, SessionState, UserSession
+from core.report_generator import (
+    ReportGenerator,
+    ReportType,
+    format_report_for_sheet,
+    get_line_notification_message,
+)
 from models.product import Product, Measurements, Category
 from integrations.line_handler import LineHandler
 from integrations.openai_client import OpenAIClient
@@ -86,6 +92,75 @@ def callback():
         abort(400)
 
     return "OK"
+
+
+@app.route("/api/report/weekly", methods=["POST"])
+def generate_weekly_report():
+    """週次レポートを生成するAPIエンドポイント"""
+    return _generate_report(ReportType.WEEKLY)
+
+
+@app.route("/api/report/monthly", methods=["POST"])
+def generate_monthly_report():
+    """月次レポートを生成するAPIエンドポイント"""
+    return _generate_report(ReportType.MONTHLY)
+
+
+def _generate_report(report_type: ReportType):
+    """
+    レポートを生成する共通処理
+
+    Args:
+        report_type: レポートの種類（週次/月次）
+
+    Returns:
+        JSON response
+    """
+    try:
+        # スプレッドシートから全データを取得
+        sheets_client = get_sheets_client()
+        headers, data = sheets_client.get_all_data()
+
+        if not headers:
+            return jsonify({"success": False, "error": "データが取得できませんでした"}), 500
+
+        # レポートを生成
+        generator = ReportGenerator(data, headers)
+        if report_type == ReportType.WEEKLY:
+            report = generator.generate_weekly_report()
+        else:
+            report = generator.generate_monthly_report()
+
+        # レポートをスプレッドシート用データに変換
+        report_data = format_report_for_sheet(report)
+
+        # 新しいシートを作成
+        success = sheets_client.create_report_sheet(report.sheet_name, report_data)
+        if not success:
+            return jsonify({"success": False, "error": "シート作成に失敗しました"}), 500
+
+        # LINE通知を送信
+        admin_user_id = Config.LINE_ADMIN_USER_ID
+        if admin_user_id:
+            try:
+                handler = get_line_handler()
+                message = get_line_notification_message(report)
+                handler.push_message(admin_user_id, message)
+                print(f"[INFO] LINE通知を送信しました: {admin_user_id}")
+            except Exception as e:
+                print(f"[WARNING] LINE通知送信に失敗しました: {e}")
+
+        return jsonify({
+            "success": True,
+            "sheet_name": report.sheet_name,
+            "period": f"{report.period_start.strftime('%Y-%m-%d')} ~ {report.period_end.strftime('%Y-%m-%d')}",
+            "sales_count": report.sales_summary.sales_count,
+            "net_profit": report.sales_summary.net_profit,
+        })
+
+    except Exception as e:
+        print(f"[ERROR] レポート生成に失敗しました: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # イベントハンドラーの登録

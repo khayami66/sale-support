@@ -16,6 +16,7 @@ from linebot.v3.messaging import (
     MessagingApi,
     MessagingApiBlob,
     ReplyMessageRequest,
+    PushMessageRequest,
     TextMessage,
 )
 from linebot.v3.webhooks import (
@@ -108,6 +109,32 @@ class LineHandler:
                 messages=messages,
             )
         )
+
+    def push_message(self, user_id: str, text: str) -> bool:
+        """
+        プッシュメッセージを送信する（返信トークン不要）。
+
+        Args:
+            user_id: 送信先ユーザーID
+            text: メッセージテキスト
+
+        Returns:
+            bool: 送信成功時True、失敗時False
+        """
+        try:
+            if len(text) > 5000:
+                text = text[:4997] + "..."
+
+            self.messaging_api.push_message(
+                PushMessageRequest(
+                    to=user_id,
+                    messages=[TextMessage(text=text)],
+                )
+            )
+            return True
+        except Exception as e:
+            print(f"[ERROR] プッシュメッセージ送信に失敗しました: {e}")
+            return False
 
     def download_image(self, message_id: str, user_id: str) -> str:
         """

@@ -21,6 +21,7 @@ class Config:
     # LINE Messaging API設定
     LINE_CHANNEL_ACCESS_TOKEN: str = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
     LINE_CHANNEL_SECRET: str = os.getenv("LINE_CHANNEL_SECRET", "")
+    LINE_ADMIN_USER_ID: str = os.getenv("LINE_ADMIN_USER_ID", "")  # 報告書通知先のユーザーID
 
     # Google Sheets設定
     GOOGLE_SHEETS_CREDENTIALS: str = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "")

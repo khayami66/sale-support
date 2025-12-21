@@ -383,6 +383,170 @@ class SheetsClient:
             return False, None
 
 
+    def get_all_data(self) -> tuple[list[str], list[list]]:
+        """
+        メインシートの全データを取得する。
+
+        Returns:
+            tuple[list[str], list[list]]: (ヘッダー行, データ行のリスト)
+        """
+        try:
+            self._worksheet = None  # キャッシュをクリア
+            worksheet = self._get_worksheet()
+            all_values = worksheet.get_all_values()
+
+            if len(all_values) < 1:
+                return [], []
+
+            headers = all_values[0]
+            data = all_values[1:] if len(all_values) > 1 else []
+
+            return headers, data
+        except Exception as e:
+            print(f"[ERROR] データ取得に失敗しました: {e}")
+            return [], []
+
+    def create_report_sheet(self, sheet_name: str, report_data: list[list]) -> bool:
+        """
+        レポート用の新しいシートを作成し、データを書き込む。
+
+        Args:
+            sheet_name: シート名（例: 週次_12月第3週）
+            report_data: レポートデータ（2次元配列）
+
+        Returns:
+            bool: 成功時True、失敗時False
+        """
+        try:
+            spreadsheet = self._get_spreadsheet()
+
+            # 同名のシートが存在するか確認
+            existing_sheets = [ws.title for ws in spreadsheet.worksheets()]
+            if sheet_name in existing_sheets:
+                # 既存シートを削除して再作成
+                old_sheet = spreadsheet.worksheet(sheet_name)
+                spreadsheet.del_worksheet(old_sheet)
+                print(f"[INFO] 既存のシート「{sheet_name}」を削除しました")
+
+            # 新しいシートを作成（最後の位置に追加）
+            rows = len(report_data) + 10  # 余裕を持たせる
+            cols = max(len(row) for row in report_data) if report_data else 5
+            new_sheet = spreadsheet.add_worksheet(
+                title=sheet_name,
+                rows=rows,
+                cols=cols,
+            )
+            print(f"[INFO] 新しいシート「{sheet_name}」を作成しました")
+
+            # データを書き込み
+            if report_data:
+                # A1から開始してデータを書き込む
+                new_sheet.update(
+                    range_name="A1",
+                    values=report_data,
+                    value_input_option="USER_ENTERED",
+                )
+
+            # ヘッダー行のフォーマット（セクションタイトルを太字に）
+            self._format_report_sheet(new_sheet, report_data)
+
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] レポートシート作成に失敗しました: {e}")
+            return False
+
+    def _format_report_sheet(self, worksheet: gspread.Worksheet, report_data: list[list]):
+        """
+        レポートシートのフォーマットを設定する。
+
+        Args:
+            worksheet: ワークシート
+            report_data: レポートデータ
+        """
+        try:
+            spreadsheet = self._get_spreadsheet()
+            requests = []
+
+            # セクションタイトル（■で始まる行）を太字に
+            for i, row in enumerate(report_data):
+                if row and len(row) > 0 and str(row[0]).startswith("■"):
+                    requests.append({
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": worksheet.id,
+                                "startRowIndex": i,
+                                "endRowIndex": i + 1,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": 1,
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "textFormat": {"bold": True},
+                                    "backgroundColor": {
+                                        "red": 0.9,
+                                        "green": 0.9,
+                                        "blue": 0.95,
+                                    },
+                                }
+                            },
+                            "fields": "userEnteredFormat(textFormat,backgroundColor)",
+                        }
+                    })
+
+            # タイトル行（1行目）のフォーマット
+            if report_data:
+                requests.append({
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": worksheet.id,
+                            "startRowIndex": 0,
+                            "endRowIndex": 1,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": 5,
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "textFormat": {"bold": True, "fontSize": 12},
+                            }
+                        },
+                        "fields": "userEnteredFormat(textFormat)",
+                    }
+                })
+
+            # 列幅を調整
+            requests.append({
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "dimension": "COLUMNS",
+                        "startIndex": 0,
+                        "endIndex": 1,
+                    },
+                    "properties": {"pixelSize": 180},
+                    "fields": "pixelSize",
+                }
+            })
+            requests.append({
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "dimension": "COLUMNS",
+                        "startIndex": 1,
+                        "endIndex": 5,
+                    },
+                    "properties": {"pixelSize": 120},
+                    "fields": "pixelSize",
+                }
+            })
+
+            if requests:
+                spreadsheet.batch_update({"requests": requests})
+
+        except Exception as e:
+            print(f"[WARNING] レポートシートのフォーマットに失敗しました: {e}")
+
+
 # シングルトンインスタンス
 _sheets_client: Optional[SheetsClient] = None
 
