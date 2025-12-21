@@ -208,6 +208,14 @@ def process_text_message(user_id: str, text: str, reply_token: str):
         handler.reply_text(reply_token, "セッションをリセットしました。\n商品画像と「仕入れ価格 管理番号」を送信してください。\n例: 「880 222」または「880 222 90s」")
         return
 
+    # ユーザーIDコマンド
+    if text.strip().lower() in ["ユーザーid", "userid", "user id", "id"]:
+        handler.reply_text(
+            reply_token,
+            f"あなたのユーザーIDは:\n\n{user_id}\n\nこのIDをRenderの環境変数\nLINE_ADMIN_USER_ID\nに設定してください。"
+        )
+        return
+
     # 売却コマンド
     if text.strip() in ["売却", "売れた", "販売完了"]:
         session.reset()
